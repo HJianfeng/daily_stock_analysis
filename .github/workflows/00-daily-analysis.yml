@@ -18,7 +18,7 @@ on:
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
       auto_select:
-        description: '先运行 AlphaSift 筛选当天 A 股候选，再合并固定自选股'
+        description: '先运行 AlphaSift AI 复核并推送简报，再合并固定自选股'
         type: boolean
         default: true
       force_run:
@@ -39,7 +39,7 @@ jobs:
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。
     environment: STOCK_LIST
     # 添加超时限制，防止任务卡死
-    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '150') }}
+    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '180') }}
     
     steps:
       - name: 随机延迟（避免固定时间访问）
@@ -87,14 +87,42 @@ jobs:
           key: dsa-cn-pack-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: dsa-cn-pack-
 
-      - name: 更新当天日线并筛选候选
+      - name: 恢复 AlphaSift 通知去重记录
         if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
-        timeout-minutes: 110
+        uses: actions/cache/restore@v4
+        with:
+          path: .pipeline/notify
+          key: dsa-alpha-notify-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: dsa-alpha-notify-
+
+      - name: 更新当天日线、AI 复核并推送 AlphaSift 简报
+        id: alpha_push
+        if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
+        timeout-minutes: 150
         env:
           ALPHASIFT_PACK_DIR: ${{ github.workspace }}/.pipeline/pack
           TICKPLUS_API_KEY: ${{ secrets.TICKPLUS_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL || format('openai/{0}', vars.OPENAI_MODEL || secrets.OPENAI_MODEL) }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_CANDIDATE_CONTEXT_ENABLED: 'true'
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+          FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+          ALPHASIFT_NOTIFY_STATE_PATH: ${{ github.workspace }}/.pipeline/notify/state.json
         run: |
           set -euo pipefail
+          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
+            echo "::error::FEISHU_WEBHOOK_URL is required for the AlphaSift brief"
+            exit 1
+          fi
+          if [ "$LITELLM_MODEL" = "openai/" ] || { [ -z "$OPENAI_API_KEY" ] && [ -z "$DEEPSEEK_API_KEY" ]; }; then
+            echo "::error::Configure a supported AI model and API key in this DSA repository"
+            exit 1
+          fi
           today=$(TZ=Asia/Shanghai date +%F)
           root="$GITHUB_WORKSPACE"
           mode=update
@@ -102,9 +130,17 @@ jobs:
           cd .pipeline/alphasift
           "$root/.pipeline/venv/bin/python" scripts/build_pack.py "$mode" --days 250 --source auto --trade-date "$today"
           "$root/.pipeline/venv/bin/alphasift" doctor radar --pack-dir "$ALPHASIFT_PACK_DIR" --trade-date "$today" --strict-pack --require-fresh --explain
-          "$root/.pipeline/venv/bin/python" scripts/track_record.py screen --track "$root/.pipeline/track" --session asia --markets cn --ai-track off --pack-dir "$ALPHASIFT_PACK_DIR"
+          "$root/.pipeline/venv/bin/python" scripts/track_record.py screen --track "$root/.pipeline/track" --session asia --markets cn --ai-track on --pack-dir "$ALPHASIFT_PACK_DIR"
+          "$root/.pipeline/venv/bin/alphasift" daily-report --pack-dir "$ALPHASIFT_PACK_DIR" --runs-dir "$root/.pipeline/track/data/runs" --trade-date "$today" --expected-trade-date "$today" --ai-brief on --detail-url "" --output-json "$root/reports/alphasift-report.json" --output-html "$root/reports/alphasift-report.html" --output-card "$root/reports/alphasift-card.md" --explain
           cd "$root"
-          python scripts/select_alphasift_candidates.py .pipeline/track "$today" reports/alphasift-candidates.json
+          .pipeline/venv/bin/python scripts/select_alphasift_candidates.py .pipeline/track "$today" reports/alphasift-candidates.json reports/alphasift-report.json --push
+
+      - name: 保存 AlphaSift 通知去重记录
+        if: always() && steps.alpha_push.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .pipeline/notify
+          key: dsa-alpha-notify-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: 执行股票分析
         env:
