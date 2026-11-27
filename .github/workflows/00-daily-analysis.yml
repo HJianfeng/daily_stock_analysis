@@ -1,9 +1,9 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # 定时触发 - 每天北京时间 16:45 (UTC 08:45)
   schedule:
-    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+    - cron: '45 8 * * 1-5'     # 周一到周五，UTC 08:45 = 北京时间 16:45
   
   # 手动触发
   workflow_dispatch:
@@ -17,6 +17,10 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+      auto_select:
+        description: '先运行 AlphaSift 筛选当天 A 股候选，再合并固定自选股'
+        type: boolean
+        default: true
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
@@ -35,7 +39,7 @@ jobs:
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。
     environment: STOCK_LIST
     # 添加超时限制，防止任务卡死
-    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '30') }}
+    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '150') }}
     
     steps:
       - name: 随机延迟（避免固定时间访问）
@@ -60,6 +64,48 @@ jobs:
         run: |
           mkdir -p data logs reports
       
+      - name: 检出 AlphaSift
+        if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/alphasift
+          ref: main
+          path: .pipeline/alphasift
+          persist-credentials: false
+
+      - name: 安装独立筛选环境
+        if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
+        run: |
+          python -m venv .pipeline/venv
+          .pipeline/venv/bin/python -m pip install -e .pipeline/alphasift
+
+      - name: 恢复 A 股日线包
+        if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
+        uses: actions/cache@v4
+        with:
+          path: .pipeline/pack
+          key: dsa-cn-pack-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: dsa-cn-pack-
+
+      - name: 更新当天日线并筛选候选
+        if: (github.event_name == 'schedule' || inputs.auto_select) && inputs.mode != 'market-only'
+        timeout-minutes: 110
+        env:
+          ALPHASIFT_PACK_DIR: ${{ github.workspace }}/.pipeline/pack
+          TICKPLUS_API_KEY: ${{ secrets.TICKPLUS_API_KEY }}
+        run: |
+          set -euo pipefail
+          today=$(TZ=Asia/Shanghai date +%F)
+          root="$GITHUB_WORKSPACE"
+          mode=update
+          if [ ! -f "$ALPHASIFT_PACK_DIR/manifest.json" ]; then mode=backfill; fi
+          cd .pipeline/alphasift
+          "$root/.pipeline/venv/bin/python" scripts/build_pack.py "$mode" --days 250 --source auto --trade-date "$today"
+          "$root/.pipeline/venv/bin/alphasift" doctor radar --pack-dir "$ALPHASIFT_PACK_DIR" --trade-date "$today" --strict-pack --require-fresh --explain
+          "$root/.pipeline/venv/bin/python" scripts/track_record.py screen --track "$root/.pipeline/track" --session asia --markets cn --ai-track off --pack-dir "$ALPHASIFT_PACK_DIR"
+          cd "$root"
+          python scripts/select_alphasift_candidates.py .pipeline/track "$today" reports/alphasift-candidates.json
+
       - name: 执行股票分析
         env:
           # ==========================================
@@ -473,6 +519,18 @@ jobs:
             export STOCK_LIST="600519"
           fi
 
+          # 合并本轮候选与固定自选股，不写回仓库 Secrets。
+          if [ -f reports/alphasift-candidates.json ]; then
+            export STOCK_LIST="$(python - <<'PYCODE'
+          import json
+          import os
+          from src.services.stock_list_parser import split_stock_list
+          candidates = json.load(open('reports/alphasift-candidates.json'))['codes']
+          fixed = split_stock_list(os.environ.get('STOCK_LIST', ''))
+          print(','.join(dict.fromkeys([*candidates, *fixed])))
+          PYCODE
+            )"
+          fi
           # 处理 LITELLM YAML 配置文件
           if [ -n "$LITELLM_CONFIG_YAML" ] && [ -n "$LITELLM_CONFIG" ]; then
             echo "📝 使用 GitHub Actions Secrets/Variables 中的 LITELLM_CONFIG_YAML 配置"
