@@ -2089,10 +2089,6 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 ## 本 Fork 的 AlphaSift 盘后联动
 
-默认每日工作日北京时间 16:45 触发 `00-daily-analysis.yml`。工作流检出同一 GitHub owner 下 `alphasift` 仓库的 `main`，在独立虚拟环境构建或更新 250 日 A 股日线包，并严格验证当天日期，再执行全部 A 股规则筛选。首次回填可能较慢；后续复用 Actions 私有缓存，不把原始日线包发布为 artifact。
-
-候选选择优先不同策略共同命中的数量，其次按平均评分排序，最多 5 只；排除筛选输出中带风险标记的候选。规则筛选本身不调用 LLM，新闻与 AI 复核交给 DSA，避免重复模型费## 本 Fork 的 AlphaSift 盘后联动
-
 默认每个工作日北京时间 16:45 触发 `00-daily-analysis.yml`：更新并校验当天 A 股日线包 → 规则筛选 → AI 逐策略复核 → 生成 AlphaSift 研报与独立飞书简报 → 合并候选与固定自选股 → DSA 深入分析及通知。触发时间不是完成时间，首次 250 日日线回填可能较慢，后续复用 Actions 私有缓存。
 
 工作流检出同一 owner 下 `alphasift` 的 `main`，在独立虚拟环境运行；没有把其源码复制进 DSA。模型复用 DSA 仓库已有的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或显式 `LITELLM_MODEL`；无前缀的 `OPENAI_MODEL` 通过 `openai/` 协议路由调用。飞书复用本仓库的 `FEISHU_WEBHOOK_URL`、可选 `FEISHU_WEBHOOK_SECRET` 和 `FEISHU_WEBHOOK_KEYWORD`，搜索复用 `SERPAPI_API_KEYS` / `TAVILY_API_KEYS`。另一个仓库中的 Secrets 不会自动共享。本联动只使用 DeepSeek/OpenAI 兼容路径，不增加应用 `.env`、API、Web、Desktop 或 Docker 配置。
