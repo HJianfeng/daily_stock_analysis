@@ -2085,3 +2085,16 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 - 仅开放 `ToolSurface` 中声明为 `read_only=True` 的工具，以及 `resolve_stock`、`start_stock_analysis`、`get_analysis_status`、`get_latest_report`。
 - 默认关闭 `get_portfolio_snapshot` 与所有写配置能力；`start_stock_analysis` 默认 `notify=False`，避免外部 Agent 自动触发群推送。
 - `start_stock_analysis` 会消耗模型调用额度并保存本地分析报告；部分行情与检索工具可能更新本地缓存。
+
+
+## 本 Fork 的 AlphaSift 盘后联动
+
+默认每日工作日北京时间 16:45 触发 `00-daily-analysis.yml`。工作流检出同一 GitHub owner 下 `alphasift` 仓库的 `main`，在独立虚拟环境构建或更新 250 日 A 股日线包，并严格验证当天日期，再执行全部 A 股规则筛选。首次回填可能较慢；后续复用 Actions 私有缓存，不把原始日线包发布为 artifact。
+
+候选选择优先不同策略共同命中的数量，其次按平均评分排序，最多 5 只；排除筛选输出中带风险标记的候选。规则筛选本身不调用 LLM，新闻与 AI 复核交给 DSA，避免重复模型费用。筛选风险标记不是完整公告审查，缺少标记不代表没有风险。候选与原 `STOCK_LIST` 合并去重，仅覆盖本轮环境，不修改 Secrets。记录日期、代码、入选策略与评分的 `reports/alphasift-candidates.json` 随分析报告上传。
+
+任一策略失败、快照不是当天、日线包不新鲜或无候选时停止后续分析，在 Actions 显示失败，不静默使用旧名单。非交易日自动任务也可能因当天数据验证而停止；手动“强制运行”仅控制 DSA 交易日检查，不能绕过此新鲜度门禁。失败详情在 Actions 日志，飞书仍只接收正常 DSA 报告。
+
+手动运行默认勾选 `auto_select`；取消勾选可直接分析固定 `STOCK_LIST`。`market-only` 跳过 AlphaSift。原 18:00 定时已由本次 16:45 编排替换。AlphaSift 原有 18:30 多市场任务保持独立，不会触发第二次 DSA；它的 Secrets 与 DSA 仓库不共享。
+
+本流水线不增加 `.env`、API、Web 或 Docker 配置。回退时恢复本 Fork 此次提交之前的工作流，并删除 `scripts/select_alphasift_candidates.py` 及本节即可。工作日 16:45 是触发时间，受排队与上游数据更新时间影响，不保证此时完成或数据已齐全。
