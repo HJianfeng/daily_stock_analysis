@@ -2091,10 +2091,16 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 默认每日工作日北京时间 16:45 触发 `00-daily-analysis.yml`。工作流检出同一 GitHub owner 下 `alphasift` 仓库的 `main`，在独立虚拟环境构建或更新 250 日 A 股日线包，并严格验证当天日期，再执行全部 A 股规则筛选。首次回填可能较慢；后续复用 Actions 私有缓存，不把原始日线包发布为 artifact。
 
-候选选择优先不同策略共同命中的数量，其次按平均评分排序，最多 5 只；排除筛选输出中带风险标记的候选。规则筛选本身不调用 LLM，新闻与 AI 复核交给 DSA，避免重复模型费用。筛选风险标记不是完整公告审查，缺少标记不代表没有风险。候选与原 `STOCK_LIST` 合并去重，仅覆盖本轮环境，不修改 Secrets。记录日期、代码、入选策略与评分的 `reports/alphasift-candidates.json` 随分析报告上传。
+候选选择优先不同策略共同命中的数量，其次按平均评分排序，最多 5 只；排除筛选输出中带风险标记的候选。规则筛选本身不调用 LLM，新闻与 AI 复核交给 DSA，避免重复模型费## 本 Fork 的 AlphaSift 盘后联动
 
-任一策略失败、快照不是当天、日线包不新鲜或无候选时停止后续分析，在 Actions 显示失败，不静默使用旧名单。非交易日自动任务也可能因当天数据验证而停止；手动“强制运行”仅控制 DSA 交易日检查，不能绕过此新鲜度门禁。失败详情在 Actions 日志，飞书仍只接收正常 DSA 报告。
+默认每个工作日北京时间 16:45 触发 `00-daily-analysis.yml`：更新并校验当天 A 股日线包 → 规则筛选 → AI 逐策略复核 → 生成 AlphaSift 研报与独立飞书简报 → 合并候选与固定自选股 → DSA 深入分析及通知。触发时间不是完成时间，首次 250 日日线回填可能较慢，后续复用 Actions 私有缓存。
 
-手动运行默认勾选 `auto_select`；取消勾选可直接分析固定 `STOCK_LIST`。`market-only` 跳过 AlphaSift。原 18:00 定时已由本次 16:45 编排替换。AlphaSift 原有 18:30 多市场任务保持独立，不会触发第二次 DSA；它的 Secrets 与 DSA 仓库不共享。
+工作流检出同一 owner 下 `alphasift` 的 `main`，在独立虚拟环境运行；没有把其源码复制进 DSA。模型复用 DSA 仓库已有的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或显式 `LITELLM_MODEL`；无前缀的 `OPENAI_MODEL` 通过 `openai/` 协议路由调用。飞书复用本仓库的 `FEISHU_WEBHOOK_URL`、可选 `FEISHU_WEBHOOK_SECRET` 和 `FEISHU_WEBHOOK_KEYWORD`，搜索复用 `SERPAPI_API_KEYS` / `TAVILY_API_KEYS`。另一个仓库中的 Secrets 不会自动共享。本联动只使用 DeepSeek/OpenAI 兼容路径，不增加应用 `.env`、API、Web、Desktop 或 Docker 配置。
 
-本流水线不增加 `.env`、API、Web 或 Docker 配置。回退时恢复本 Fork 此次提交之前的工作流，并删除 `scripts/select_alphasift_candidates.py` 及本节即可。工作日 16:45 是触发时间，受排队与上游数据更新时间影响，不保证此时完成或数据已齐全。
+所有非空规则策略必须有成功的 AI 复核，只从实际获得 `llm_score` 的 AI 候选中选股；空规则策略不要求 AI 结果。优先按不同策略命中数、其次平均评分排序，最多 5 只，排除 AI 输出或公告抽检已标记风险的候选。抽检未标记不代表没有风险。固定 `STOCK_LIST` 是用户自选股，不经过此候选筛选，合并去重后由 DSA 分析；Secrets 不会被自动改写。
+
+日期不符、规则策略失败、非空策略的 AI 缺失/降级、AI 综述降级或无合格候选时停止，不把规则 fallback 当作 AI 成功。AlphaSift 飞书发送失败也会使步骤失败；结果保存在 `reports/alphasift-push.json`。成功或已发送的通知去重记录保存在独立 Actions 缓存中，即使后续 DSA 失败，正常重跑也会避免重复发送同日 AlphaSift 简报；缓存被清理/丢失时仍可能重发。DSA 的通知逻辑保持原样。
+
+报告 artifact 包含 `alphasift-report.json`、`alphasift-report.html`、`alphasift-card.md`、`alphasift-candidates.json` 与推送结果；不上传原始日线包或密钥。手动默认勾选 `auto_select`；取消后仅分析固定名单。`market-only` 跳过 AlphaSift。“强制运行”只跳过 DSA 交易日检查，不能绕过联动的新鲜度验证，非交易日联动可能停止。
+
+原 DSA 18:00 任务已由本流程替换；AlphaSift 仓库的 18:30 亚洲自动任务已移除，避免重复筛选与推送。AlphaSift 手动 asia/rebuild 与既有美股定时任务保留，手动运行仍可能产生另一份通知。恢复原行为需分别恢复两个仓库本次修改前的工作流，并恢复候选脚本和本节文档。本次只更新中文版的本 Fork 专用说明，未修改上游通用英文部署文档。
