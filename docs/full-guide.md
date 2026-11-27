@@ -2091,7 +2091,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 默认每个工作日北京时间 16:45 触发 `00-daily-analysis.yml`：更新并校验当天 A 股日线包 → 规则筛选 → AI 逐策略复核 → 生成 AlphaSift 研报与独立飞书简报 → 合并候选与固定自选股 → DSA 深入分析及通知。触发时间不是完成时间，首次 250 日日线回填可能较慢，后续复用 Actions 私有缓存。
 
-工作流检出同一 owner 下 `alphasift` 的 `main`，在独立虚拟环境运行；没有把其源码复制进 DSA。模型复用 DSA 仓库已有的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或显式 `LITELLM_MODEL`；无前缀的 `OPENAI_MODEL` 通过 `openai/` 协议路由调用。飞书复用本仓库的 `FEISHU_WEBHOOK_URL`、可选 `FEISHU_WEBHOOK_SECRET` 和 `FEISHU_WEBHOOK_KEYWORD`，搜索复用 `SERPAPI_API_KEYS` / `TAVILY_API_KEYS`。另一个仓库中的 Secrets 不会自动共享。本联动只使用 DeepSeek/OpenAI 兼容路径，不增加应用 `.env`、API、Web、Desktop 或 Docker 配置。
+工作流检出同一 owner 下 `alphasift` 的 `main`，在独立虚拟环境运行；没有把其源码复制进 DSA。模型复用 DSA 仓库已有的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或显式 `LITELLM_MODEL`；无前缀的 `OPENAI_MODEL` 通过 `openai/` 协议路由调用。飞书复用本仓库的 `FEISHU_WEBHOOK_URL`、可选 `FEISHU_WEBHOOK_SECRET` 和 `FEISHU_WEBHOOK_KEYWORD`，搜索复用 `SERPAPI_API_KEYS` / `TAVILY_API_KEYS`。另一个仓库中的 Secrets 不会自动共享。AlphaSift 的 `LLM_MAX_TOKENS` 默认设为 16384、`LLM_TIMEOUT_SEC` 默认 120 秒，可用同名 Repository Variables 调整，以避免 DeepSeek 输出被 8192 token 上限截断；这些覆盖值仅作用于 AlphaSift 步骤。本联动只使用 DeepSeek/OpenAI 兼容路径，不增加应用 `.env`、API、Web、Desktop 或 Docker 配置。
 
 所有非空规则策略必须有成功的 AI 复核，只从实际获得 `llm_score` 的 AI 候选中选股；空规则策略不要求 AI 结果。优先按不同策略命中数、其次平均评分排序，最多 5 只，排除 AI 输出或公告抽检已标记风险的候选。抽检未标记不代表没有风险。固定 `STOCK_LIST` 是用户自选股，不经过此候选筛选，合并去重后由 DSA 分析；Secrets 不会被自动改写。
 
